@@ -108,4 +108,6 @@ func (h *HTTPServerV2) addRouterRuleAccess(ws *restful.WebService) {
 	ws.Route(docs.EnrichUpdateRouterRuleApiDocs(ws.PUT("/routings").To(h.UpdateRoutings)))
 	ws.Route(docs.EnrichGetRouterRuleApiDocs(ws.GET("/routings").To(h.GetRoutings)))
 	ws.Route(docs.EnrichEnableRouterRuleApiDocs(ws.PUT("/routings/enable").To(h.EnableRoutings)))
+	ws.Route(docs.EnrichExportRouterRuleApiDocs(ws.GET("/routings/export").To(h.ExportRoutings)))
+	ws.Route(docs.EnrichImportRouterRuleApiDocs(ws.POST("/routings/import").To(h.ImportRoutings)))
 }

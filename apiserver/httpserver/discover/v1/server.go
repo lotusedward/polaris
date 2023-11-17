@@ -201,6 +201,8 @@ func (h *HTTPServerV1) addRateLimitRuleAccess(ws *restful.WebService) {
 	ws.Route(docs.EnrichUpdateRateLimitsApiDocs(ws.PUT("/ratelimits").To(h.UpdateRateLimits)))
 	ws.Route(docs.EnrichGetRateLimitsApiDocs(ws.GET("/ratelimits").To(h.GetRateLimits)))
 	ws.Route(docs.EnrichEnableRateLimitsApiDocs(ws.PUT("/ratelimits/enable").To(h.EnableRateLimits)))
+	ws.Route(docs.EnrichExportRateLimitsApiDocs(ws.GET("/ratelimits/export").To(h.ExportRateLimits)))
+	ws.Route(docs.EnrichImportRateLimitsApiDocs(ws.POST("/ratelimits/import").To(h.ImportRateLimits)))
 }
 
 func (h *HTTPServerV1) addCircuitBreakerRuleAccess(ws *restful.WebService) {
@@ -228,6 +230,10 @@ func (h *HTTPServerV1) addCircuitBreakerRuleAccess(ws *restful.WebService) {
 		ws.POST("/circuitbreaker/rules/delete").To(h.DeleteCircuitBreakerRules)))
 	ws.Route(docs.EnrichEnableCircuitBreakerRulesApiDocs(
 		ws.PUT("/circuitbreaker/rules/enable").To(h.EnableCircuitBreakerRules)))
+	ws.Route(docs.EnrichExportCircuitBreakerRulesApiDocs(
+		ws.GET("/circuitbreaker/rules/export").To(h.ExportCircuitBreakerRules)))
+	ws.Route(docs.EnrichImportCircuitBreakerRulesApiDocs(
+		ws.POST("/circuitbreaker/rules/import").To(h.ImportCircuitBreakerRules)))
 	ws.Route(docs.EnrichGetFaultDetectRulesApiDocs(ws.GET("/faultdetectors").To(h.GetFaultDetectRules)))
 	ws.Route(docs.EnrichCreateFaultDetectRulesApiDocs(ws.POST("/faultdetectors").To(h.CreateFaultDetectRules)))
 	ws.Route(docs.EnrichUpdateFaultDetectRulesApiDocs(ws.PUT("/faultdetectors").To(h.UpdateFaultDetectRules)))

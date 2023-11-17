@@ -470,6 +470,30 @@ func EnrichEnableRateLimitsApiDocs(r *restful.RouteBuilder) *restful.RouteBuilde
 		}{})
 }
 
+func EnrichExportRateLimitsApiDocs(r *restful.RouteBuilder) *restful.RouteBuilder {
+	return r.Doc("导出限流规则").
+		Metadata(restfulspec.KeyOpenAPITags, rateLimitsApiTags).
+		Reads([]apitraffic.Rule{}, "export rate limits").
+		Returns(0, "", struct {
+			BatchQueryResponse
+			Responses []struct {
+				BaseResponse
+			} `json:"responses"`
+		}{})
+}
+
+func EnrichImportRateLimitsApiDocs(r *restful.RouteBuilder) *restful.RouteBuilder {
+	return r.Doc("导入限流规则").
+		Metadata(restfulspec.KeyOpenAPITags, rateLimitsApiTags).
+		Reads([]apitraffic.Rule{}, "import rate limits").
+		Returns(0, "", struct {
+			BatchWriteResponse
+			Responses []struct {
+				BaseResponse
+			} `json:"responses"`
+		}{})
+}
+
 func EnrichCreateCircuitBreakerRulesApiDocs(r *restful.RouteBuilder) *restful.RouteBuilder {
 	return r.Doc("创建熔断规则").
 		Metadata(restfulspec.KeyOpenAPITags, circuitBreakersApiTags).
@@ -545,6 +569,30 @@ func EnrichGetCircuitBreakerRulesApiDocs(r *restful.RouteBuilder) *restful.Route
 		Returns(0, "", struct {
 			BatchQueryResponse
 			Data []fault_tolerance.CircuitBreakerRule `json:"data"`
+		}{})
+}
+
+func EnrichExportCircuitBreakerRulesApiDocs(r *restful.RouteBuilder) *restful.RouteBuilder {
+	return r.Doc("导出熔断规则").
+		Metadata(restfulspec.KeyOpenAPITags, circuitBreakersApiTags).
+		Reads([]apifault.CircuitBreakerRule{}, "export circuitbreaker rules").
+		Returns(0, "", struct {
+			BatchQueryResponse
+			Responses []struct {
+				BaseResponse
+			} `json:"responses"`
+		}{})
+}
+
+func EnrichImportCircuitBreakerRulesApiDocs(r *restful.RouteBuilder) *restful.RouteBuilder {
+	return r.Doc("导入熔断规则").
+		Metadata(restfulspec.KeyOpenAPITags, circuitBreakersApiTags).
+		Reads([]apifault.CircuitBreakerRule{}, "import circuitbreaker rules").
+		Returns(0, "", struct {
+			BatchWriteResponse
+			Responses []struct {
+				BaseResponse
+			} `json:"responses"`
 		}{})
 }
 
@@ -710,6 +758,32 @@ func EnrichGetRouterRuleApiDocs(r *restful.RouteBuilder) *restful.RouteBuilder {
 		Returns(0, "", struct {
 			BatchQueryResponse
 			Data []RouteRule `json:"data"`
+		}{})
+}
+
+func EnrichExportRouterRuleApiDocs(r *restful.RouteBuilder) *restful.RouteBuilder {
+	return r.Doc("导出路由规则(V2)").
+		Metadata(restfulspec.KeyOpenAPITags, routingRulesApiTags).
+		Reads([]RouteRule{}).
+		Operation("v2ExportRoutings").
+		Returns(0, "", struct {
+			BatchQueryResponse
+			Responses []struct {
+				BaseResponse
+			} `json:"responses"`
+		}{})
+}
+
+func EnrichImportRouterRuleApiDocs(r *restful.RouteBuilder) *restful.RouteBuilder {
+	return r.Doc("导入路由规则(V2)").
+		Metadata(restfulspec.KeyOpenAPITags, routingRulesApiTags).
+		Reads([]RouteRule{}).
+		Operation("v2ImportRoutings").
+		Returns(0, "", struct {
+			BatchWriteResponse
+			Responses []struct {
+				BaseResponse
+			} `json:"responses"`
 		}{})
 }
 
