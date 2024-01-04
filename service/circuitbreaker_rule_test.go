@@ -25,6 +25,7 @@ import (
 
 	"github.com/golang/protobuf/ptypes"
 	"github.com/golang/protobuf/ptypes/wrappers"
+	apiconfig "github.com/polarismesh/specification/source/go/api/v1/config_manage"
 	apifault "github.com/polarismesh/specification/source/go/api/v1/fault_tolerance"
 	apimodel "github.com/polarismesh/specification/source/go/api/v1/model"
 	apiservice "github.com/polarismesh/specification/source/go/api/v1/service_manage"
@@ -32,6 +33,58 @@ import (
 
 	"github.com/polarismesh/polaris/service"
 )
+
+func TestExportCircuitBreakerRule(t *testing.T) {
+	discoverSuit := &DiscoverTestSuit{}
+	if err := discoverSuit.Initialize(); err != nil {
+		t.Fatal(err)
+	}
+	defer discoverSuit.Destroy()
+
+	t.Run("导出不存在的熔断规则，返回失败", func(t *testing.T) {
+		_, resp := createCircuitBreakerRules(discoverSuit, testCount)
+		defer cleanCircuitBreakerRules(discoverSuit, resp)
+
+		qResp := discoverSuit.DiscoverServer().ExportCircuitBreakerRules(discoverSuit.DefaultCtx,
+			map[string]string{"id": "not_exsit_id"})
+		assert.NotEqual(t, uint32(apimodel.Code_ExecuteSuccess), qResp.GetCode().GetValue())
+	})
+
+	t.Run("正常导出熔断规则，返回成功", func(t *testing.T) {
+		cbRules, resp := createCircuitBreakerRules(discoverSuit, testCount)
+		defer cleanCircuitBreakerRules(discoverSuit, resp)
+		qResp := queryCircuitBreakerRules(discoverSuit, map[string]string{"level": strconv.Itoa(int(apifault.Level_GROUP))})
+		assert.Equal(t, uint32(apimodel.Code_ExecuteSuccess), qResp.GetCode().GetValue())
+		checkCircuitBreakerRuleResponse(t, cbRules, resp)
+
+		qResp = discoverSuit.DiscoverServer().ExportCircuitBreakerRules(discoverSuit.DefaultCtx,
+			map[string]string{"name": "test-circuitbreaker-rule"})
+		assert.Equal(t, uint32(apimodel.Code_ExecuteSuccess), qResp.GetCode().GetValue())
+		assert.Greater(t, len(qResp.GetInfo().GetValue()), 0)
+	})
+}
+
+func TestImportCircuitBreakerRule(t *testing.T) {
+	discoverSuit := &DiscoverTestSuit{}
+	if err := discoverSuit.Initialize(); err != nil {
+		t.Fatal(err)
+	}
+	defer discoverSuit.Destroy()
+
+	t.Run("测试导入熔断规则", func(t *testing.T) {
+		_, resp := createCircuitBreakerRules(discoverSuit, testCount)
+		defer cleanCircuitBreakerRules(discoverSuit, resp)
+		// 使用export的输出作为import的输入
+		qResp := discoverSuit.DiscoverServer().ExportCircuitBreakerRules(discoverSuit.DefaultCtx,
+			map[string]string{"name": "test-circuitbreaker-rule"})
+		rsp := discoverSuit.DiscoverServer().ImportCircuitBreakerRules(discoverSuit.DefaultCtx,
+			[]*apiconfig.ConfigFile{{
+				Content: qResp.GetInfo(),
+			}},
+		)
+		assert.Equal(t, uint32(apimodel.Code_ExecuteSuccess), rsp.GetCode().GetValue())
+	})
+}
 
 func buildUnnamedCircuitBreakerRule() *apifault.CircuitBreakerRule {
 	return &apifault.CircuitBreakerRule{

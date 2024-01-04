@@ -18,13 +18,19 @@
 package service
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"time"
 
+	"github.com/ghodss/yaml"
 	"github.com/golang/protobuf/jsonpb"
+	"github.com/golang/protobuf/proto"
 	"github.com/golang/protobuf/ptypes/wrappers"
+	apiconfig "github.com/polarismesh/specification/source/go/api/v1/config_manage"
 	apifault "github.com/polarismesh/specification/source/go/api/v1/fault_tolerance"
 	apimodel "github.com/polarismesh/specification/source/go/api/v1/model"
 	apiservice "github.com/polarismesh/specification/source/go/api/v1/service_manage"
@@ -34,6 +40,9 @@ import (
 	commonstore "github.com/polarismesh/polaris/common/store"
 	commontime "github.com/polarismesh/polaris/common/time"
 	"github.com/polarismesh/polaris/common/utils"
+
+	protoV2 "google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
 )
 
 func checkBatchCircuitBreakerRules(req []*apifault.CircuitBreakerRule) *apiservice.BatchWriteResponse {
@@ -376,6 +385,82 @@ func (s *Server) GetCircuitBreakerRules(ctx context.Context, query map[string]st
 		}
 	}
 	return out
+}
+
+// ExportCircuitBreakerRules Export CircuitBreaker rules
+func (s *Server) ExportCircuitBreakerRules(ctx context.Context, query map[string]string) *apiservice.BatchQueryResponse {
+	ret := s.GetCircuitBreakerRules(ctx, query)
+	if ret.GetCode().GetValue() != uint32(apimodel.Code_ExecuteSuccess) {
+		return api.NewBatchQueryResponseWithMsg(apimodel.Code_InvalidParameter, ret.GetInfo().GetValue())
+	} else if len(ret.GetData()) == 0 {
+		return api.NewBatchQueryResponse(apimodel.Code_NotFoundCircuitBreaker)
+	}
+
+	buf := new(bytes.Buffer)
+	w := zip.NewWriter(buf)
+	for _, data := range ret.GetData() {
+		msg := &apifault.CircuitBreakerRule{}
+		if err := anypb.UnmarshalTo(data, proto.MessageV2(msg), protoV2.UnmarshalOptions{}); err != nil {
+			return api.NewBatchQueryResponseWithMsg(apimodel.Code_ParseException, err.Error())
+		} else if byMsg, err := yaml.Marshal(msg); err != nil {
+			return api.NewBatchQueryResponseWithMsg(apimodel.Code_ParseException, err.Error())
+		} else if f, err := w.Create(fmt.Sprint(msg.GetName(), ".yaml")); err != nil {
+			return api.NewBatchQueryResponseWithMsg(apimodel.Code_ParseException, err.Error())
+		} else if _, err := f.Write(byMsg); err != nil {
+			return api.NewBatchQueryResponseWithMsg(apimodel.Code_ParseException, err.Error())
+		}
+	}
+	w.Close()
+	return api.NewBatchQueryResponseWithMsg(apimodel.Code_ExecuteSuccess, buf.String())
+}
+
+// ImportCircuitBreakerRules Import CircuitBreaker rules
+func (s *Server) ImportCircuitBreakerRules(ctx context.Context, configFiles []*apiconfig.ConfigFile) *apiservice.BatchWriteResponse {
+	var exists, news []*apifault.CircuitBreakerRule
+	for _, file := range configFiles {
+		byValue := file.GetContent().GetValue()
+		zr, err := zip.NewReader(bytes.NewReader([]byte(byValue)), int64(len(byValue)))
+		if err != nil {
+			log.Errorf("%+v", err)
+			continue
+		}
+		for _, file := range zr.File {
+			f, err := file.Open()
+			if err != nil {
+				log.Errorf("file.Open err: %+v", err)
+				continue
+			}
+			byData, err := io.ReadAll(f)
+			if err != nil {
+				log.Errorf("io.ReadAll err: %+v", err)
+				continue
+			}
+			rule := &apifault.CircuitBreakerRule{}
+			if err := yaml.Unmarshal(byData, rule); err != nil {
+				log.Errorf("unmarshal circuitbreaker file fail: %+v, content: %+v", err, byData)
+				continue
+			}
+			param := map[string]string{"id": rule.GetId()}
+			if resp := s.GetCircuitBreakerRules(ctx, param); resp.GetAmount().GetValue() == 0 {
+				news = append(news, rule)
+				continue
+			}
+			exists = append(exists, rule)
+		}
+	}
+
+	var ret = &apiservice.BatchWriteResponse{}
+	if len(news) > 0 {
+		ret = s.CreateCircuitBreakerRules(ctx, news)
+		api.FormatBatchWriteResponse(ret)
+	}
+
+	if len(exists) > 0 {
+		ret = s.UpdateCircuitBreakerRules(ctx, exists)
+		api.FormatBatchWriteResponse(ret)
+	}
+
+	return ret
 }
 
 func marshalCircuitBreakerRuleV2(req *apifault.CircuitBreakerRule) (string, error) {

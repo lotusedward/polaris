@@ -18,24 +18,18 @@
 package v2
 
 import (
-	"fmt"
 	"io"
-	"io/fs"
-	"os"
 	"strings"
 
 	"github.com/emicklei/go-restful/v3"
-	"github.com/ghodss/yaml"
 	"github.com/golang/protobuf/proto"
 	apimodel "github.com/polarismesh/specification/source/go/api/v1/model"
-	apiservice "github.com/polarismesh/specification/source/go/api/v1/service_manage"
 	apitraffic "github.com/polarismesh/specification/source/go/api/v1/traffic_manage"
-	protoV2 "google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/anypb"
 
 	v1 "github.com/polarismesh/polaris/apiserver/httpserver/discover/v1"
 	httpcommon "github.com/polarismesh/polaris/apiserver/httpserver/utils"
 	apiv1 "github.com/polarismesh/polaris/common/api/v1"
+	"github.com/polarismesh/polaris/common/utils"
 )
 
 const (
@@ -61,7 +55,7 @@ func (h *HTTPServerV2) CreateRoutings(req *restful.Request, rsp *restful.Respons
 
 	requestText, err := h.replaceV2TypeUrl(req)
 	if err != nil {
-		handler.WriteHeaderAndProtoV2(apiv1.NewBatchWriteResponseWithMsg(apimodel.Code_ParseException, err.Error()))
+		handler.WriteHeaderAndProto(apiv1.NewBatchWriteResponseWithMsg(apimodel.Code_ParseException, err.Error()))
 		return
 	}
 	var routings v1.RouterArr
@@ -71,12 +65,12 @@ func (h *HTTPServerV2) CreateRoutings(req *restful.Request, rsp *restful.Respons
 		return msg
 	}, requestText)
 	if err != nil {
-		handler.WriteHeaderAndProtoV2(apiv1.NewBatchWriteResponseWithMsg(apimodel.Code_ParseException, err.Error()))
+		handler.WriteHeaderAndProto(apiv1.NewBatchWriteResponseWithMsg(apimodel.Code_ParseException, err.Error()))
 		return
 	}
 
 	ret := h.namingServer.CreateRoutingConfigsV2(ctx, routings)
-	handler.WriteHeaderAndProtoV2(ret)
+	handler.WriteHeaderAndProto(ret)
 }
 
 // DeleteRoutings 删除规则路由
@@ -87,7 +81,7 @@ func (h *HTTPServerV2) DeleteRoutings(req *restful.Request, rsp *restful.Respons
 	}
 	requestText, err := h.replaceV2TypeUrl(req)
 	if err != nil {
-		handler.WriteHeaderAndProtoV2(apiv1.NewBatchWriteResponseWithMsg(apimodel.Code_ParseException, err.Error()))
+		handler.WriteHeaderAndProto(apiv1.NewBatchWriteResponseWithMsg(apimodel.Code_ParseException, err.Error()))
 		return
 	}
 	var routings v1.RouterArr
@@ -97,12 +91,12 @@ func (h *HTTPServerV2) DeleteRoutings(req *restful.Request, rsp *restful.Respons
 		return msg
 	}, requestText)
 	if err != nil {
-		handler.WriteHeaderAndProtoV2(apiv1.NewBatchWriteResponseWithMsg(apimodel.Code_ParseException, err.Error()))
+		handler.WriteHeaderAndProto(apiv1.NewBatchWriteResponseWithMsg(apimodel.Code_ParseException, err.Error()))
 		return
 	}
 
 	ret := h.namingServer.DeleteRoutingConfigsV2(ctx, routings)
-	handler.WriteHeaderAndProtoV2(ret)
+	handler.WriteHeaderAndProto(ret)
 }
 
 // UpdateRoutings 修改规则路由
@@ -113,7 +107,7 @@ func (h *HTTPServerV2) UpdateRoutings(req *restful.Request, rsp *restful.Respons
 	}
 	requestText, err := h.replaceV2TypeUrl(req)
 	if err != nil {
-		handler.WriteHeaderAndProtoV2(apiv1.NewBatchWriteResponseWithMsg(apimodel.Code_ParseException, err.Error()))
+		handler.WriteHeaderAndProto(apiv1.NewBatchWriteResponseWithMsg(apimodel.Code_ParseException, err.Error()))
 		return
 	}
 	var routings v1.RouterArr
@@ -123,12 +117,12 @@ func (h *HTTPServerV2) UpdateRoutings(req *restful.Request, rsp *restful.Respons
 		return msg
 	}, requestText)
 	if err != nil {
-		handler.WriteHeaderAndProtoV2(apiv1.NewBatchWriteResponseWithMsg(apimodel.Code_ParseException, err.Error()))
+		handler.WriteHeaderAndProto(apiv1.NewBatchWriteResponseWithMsg(apimodel.Code_ParseException, err.Error()))
 		return
 	}
 
 	ret := h.namingServer.UpdateRoutingConfigsV2(ctx, routings)
-	handler.WriteHeaderAndProtoV2(ret)
+	handler.WriteHeaderAndProto(ret)
 }
 
 // GetRoutings 查询规则路由
@@ -140,7 +134,7 @@ func (h *HTTPServerV2) GetRoutings(req *restful.Request, rsp *restful.Response) 
 
 	queryParams := httpcommon.ParseQueryParams(req)
 	ret := h.namingServer.QueryRoutingConfigsV2(handler.ParseHeaderContext(), queryParams)
-	handler.WriteHeaderAndProtoV2(ret)
+	handler.WriteHeaderAndProto(ret)
 }
 
 // ExportRoutings 导出规则路由
@@ -151,30 +145,11 @@ func (h *HTTPServerV2) ExportRoutings(req *restful.Request, rsp *restful.Respons
 	}
 
 	queryParams := httpcommon.ParseQueryParams(req)
-	ret := h.namingServer.QueryRoutingConfigsV2(handler.ParseHeaderContext(), queryParams)
-	if ret.GetCode().GetValue() != uint32(apimodel.Code_ExecuteSuccess) {
-		handler.WriteHeaderAndProtoV2(ret)
-		return
-	} else if len(ret.GetData()) == 0 {
-		handler.WriteHeaderAndProtoV2(apiv1.NewBatchQueryResponse(apimodel.Code_NotFoundRouting))
-		return
-	}
-
-	for _, data := range ret.GetData() {
-		msg := &apitraffic.RouteRule{}
-		if err := anypb.UnmarshalTo(data, proto.MessageV2(msg), protoV2.UnmarshalOptions{}); err != nil {
-			handler.WriteHeaderAndProto(apiv1.NewBatchQueryResponseWithMsg(apimodel.Code_ParseException, err.Error()))
-			return
-		} else if byMsg, err := yaml.Marshal(msg); err != nil {
-			handler.WriteHeaderAndProtoV2(apiv1.NewBatchQueryResponseWithMsg(apimodel.Code_ParseException, err.Error()))
-			return
-		} else if err := os.WriteFile(fmt.Sprintf("routing_%s.yaml", msg.GetId()), byMsg, fs.ModePerm); err != nil {
-			handler.WriteHeaderAndProtoV2(apiv1.NewBatchQueryResponseWithMsg(apimodel.Code_ParseException, err.Error()))
-			return
-		}
-	}
-
-	handler.WriteHeaderAndProtoV2(apiv1.NewBatchQueryResponseWithMsg(apimodel.Code_ExecuteSuccess, "已生成yaml配置"))
+	ret := h.namingServer.ExportRoutings(handler.ParseHeaderContext(), queryParams)
+	handler.WriteHeaderAndProto(ret)
+	handler.Response.AddHeader("Content-Type", "application/zip")
+	handler.Response.AddHeader("Content-Disposition", "attachment; filename=routings.zip")
+	handler.Response.ResponseWriter.Write([]byte(ret.GetInfo().GetValue()))
 }
 
 // ImportRoutings 导入规则路由
@@ -184,45 +159,22 @@ func (h *HTTPServerV2) ImportRoutings(req *restful.Request, rsp *restful.Respons
 		Response: rsp,
 	}
 
-	requestText, err := h.replaceV2TypeUrl(req)
+	ctx := handler.ParseHeaderContext()
+	configFiles, err := handler.ParseFile()
 	if err != nil {
-		handler.WriteHeaderAndProtoV2(apiv1.NewBatchWriteResponseWithMsg(apimodel.Code_ParseException, err.Error()))
+		handler.WriteHeaderAndProto(apiv1.NewBatchWriteResponseWithMsg(apimodel.Code_ParseException, err.Error()))
 		return
 	}
-
-	var routings v1.RouterArr
-	ctx, err := handler.ParseArrayByText(func() proto.Message {
-		msg := &apitraffic.RouteRule{}
-		routings = append(routings, msg)
-		return msg
-	}, requestText)
-	if err != nil {
-		handler.WriteHeaderAndProtoV2(apiv1.NewBatchWriteResponseWithMsg(apimodel.Code_ParseException, err.Error()))
-		return
-	}
-
-	var exists, news RoutingArr
-	for _, rule := range routings {
-		param := map[string]string{"id": rule.GetId()}
-		if resp := h.namingServer.QueryRoutingConfigsV2(ctx, param); resp.GetAmount().GetValue() == 0 {
-			news = append(news, rule)
-			continue
+	namespace := handler.Request.QueryParameter("namespace")
+	group := handler.Request.QueryParameter("group")
+	for _, file := range configFiles {
+		file.Namespace = utils.NewStringValue(namespace)
+		if group != "" {
+			file.Group = utils.NewStringValue(group)
 		}
-		exists = append(exists, rule)
 	}
-
-	var ret = &apiservice.BatchWriteResponse{}
-	if len(news) > 0 {
-		ret = h.namingServer.CreateRoutingConfigsV2(ctx, news)
-		apiv1.FormatBatchWriteResponse(ret)
-	}
-
-	if len(exists) > 0 {
-		ret = h.namingServer.UpdateRoutingConfigsV2(ctx, exists)
-		apiv1.FormatBatchWriteResponse(ret)
-	}
-
-	handler.WriteHeaderAndProto(ret)
+	response := h.namingServer.ImportRoutings(ctx, configFiles)
+	handler.WriteHeaderAndProto(response)
 }
 
 // EnableRoutings 启用规则路由
@@ -233,7 +185,7 @@ func (h *HTTPServerV2) EnableRoutings(req *restful.Request, rsp *restful.Respons
 	}
 	requestText, err := h.replaceV2TypeUrl(req)
 	if err != nil {
-		handler.WriteHeaderAndProtoV2(apiv1.NewBatchWriteResponseWithMsg(apimodel.Code_ParseException, err.Error()))
+		handler.WriteHeaderAndProto(apiv1.NewBatchWriteResponseWithMsg(apimodel.Code_ParseException, err.Error()))
 		return
 	}
 	var routings v1.RouterArr
@@ -243,10 +195,10 @@ func (h *HTTPServerV2) EnableRoutings(req *restful.Request, rsp *restful.Respons
 		return msg
 	}, requestText)
 	if err != nil {
-		handler.WriteHeaderAndProtoV2(apiv1.NewBatchWriteResponseWithMsg(apimodel.Code_ParseException, err.Error()))
+		handler.WriteHeaderAndProto(apiv1.NewBatchWriteResponseWithMsg(apimodel.Code_ParseException, err.Error()))
 		return
 	}
 
 	ret := h.namingServer.EnableRoutings(ctx, routings)
-	handler.WriteHeaderAndProtoV2(ret)
+	handler.WriteHeaderAndProto(ret)
 }

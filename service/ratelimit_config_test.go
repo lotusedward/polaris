@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/golang/protobuf/ptypes/duration"
+	apiconfig "github.com/polarismesh/specification/source/go/api/v1/config_manage"
 	apimodel "github.com/polarismesh/specification/source/go/api/v1/model"
 	apiservice "github.com/polarismesh/specification/source/go/api/v1/service_manage"
 	apitraffic "github.com/polarismesh/specification/source/go/api/v1/traffic_manage"
@@ -426,6 +427,7 @@ func TestUpdateRateLimit(t *testing.T) {
 				}
 				if len(resp.GetRateLimits()) == 0 {
 					errs <- errors.New("ratelimit rule count is zero")
+					return
 				}
 				checkRateLimit(t, rateLimitResp, resp.GetRateLimits()[0])
 			}(i)
@@ -727,4 +729,60 @@ func TestCheckRatelimitFieldLen(t *testing.T) {
 			t.Fatalf("%+v", resp)
 		}
 	})
+}
+
+func TestExportRateLimit(t *testing.T) {
+	discoverSuit := &DiscoverTestSuit{}
+	if err := discoverSuit.Initialize(); err != nil {
+		t.Fatal(err)
+	}
+	defer discoverSuit.Destroy()
+
+	_, serviceResp := discoverSuit.createCommonService(t, 0)
+	defer discoverSuit.cleanServiceName(serviceResp.GetName().GetValue(), serviceResp.GetNamespace().GetValue())
+	defer discoverSuit.cleanRateLimitRevision(serviceResp.GetName().GetValue(), serviceResp.GetNamespace().GetValue())
+
+	_, rateLimitResp := discoverSuit.createCommonRateLimit(t, serviceResp, 0)
+	defer discoverSuit.cleanRateLimit(rateLimitResp.GetId().GetValue())
+
+	t.Run("导出不存在的限流规则", func(t *testing.T) {
+		qResp := discoverSuit.DiscoverServer().ExportRateLimits(discoverSuit.DefaultCtx,
+			map[string]string{"id": "not_exsit_id"})
+		assert.Equal(t, uint32(apimodel.Code_NotFoundRateLimit), qResp.GetCode().GetValue())
+	})
+
+	t.Run("正常导出限流规则", func(t *testing.T) {
+		qResp := discoverSuit.DiscoverServer().ExportRateLimits(discoverSuit.DefaultCtx,
+			map[string]string{"name": "rule_name_0"})
+		assert.Equal(t, uint32(apimodel.Code_ExecuteSuccess), qResp.GetCode().GetValue())
+		assert.Greater(t, len(qResp.GetInfo().GetValue()), 0)
+	})
+}
+
+func TestImportRateLimit(t *testing.T) {
+	discoverSuit := &DiscoverTestSuit{}
+	if err := discoverSuit.Initialize(); err != nil {
+		t.Fatal(err)
+	}
+	defer discoverSuit.Destroy()
+
+	_, serviceResp := discoverSuit.createCommonService(t, 0)
+	defer discoverSuit.cleanServiceName(serviceResp.GetName().GetValue(), serviceResp.GetNamespace().GetValue())
+	defer discoverSuit.cleanRateLimitRevision(serviceResp.GetName().GetValue(), serviceResp.GetNamespace().GetValue())
+
+	_, rateLimitResp := discoverSuit.createCommonRateLimit(t, serviceResp, 0)
+	defer discoverSuit.cleanRateLimit(rateLimitResp.GetId().GetValue())
+
+	t.Run("导入限流规则", func(t *testing.T) {
+		// 使用export的输出作为import的输入
+		qResp := discoverSuit.DiscoverServer().ExportRateLimits(discoverSuit.DefaultCtx,
+			map[string]string{"id": rateLimitResp.GetId().GetValue()})
+		rsp := discoverSuit.DiscoverServer().ImportRateLimits(discoverSuit.DefaultCtx,
+			[]*apiconfig.ConfigFile{{
+				Content: qResp.GetInfo(),
+			}},
+		)
+		assert.Equal(t, uint32(apimodel.Code_ExecuteSuccess), rsp.GetCode().GetValue())
+	})
+
 }

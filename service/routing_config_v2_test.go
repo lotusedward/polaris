@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/golang/protobuf/ptypes"
+	apiconfig "github.com/polarismesh/specification/source/go/api/v1/config_manage"
 	apimodel "github.com/polarismesh/specification/source/go/api/v1/model"
 	apiservice "github.com/polarismesh/specification/source/go/api/v1/service_manage"
 	apitraffic "github.com/polarismesh/specification/source/go/api/v1/traffic_manage"
@@ -581,6 +582,54 @@ func TestUpdateCheckRoutingFieldLenV2(t *testing.T) {
 		if resp.Code.GetValue() != uint32(apimodel.Code_InvalidRoutingPriority) {
 			t.Fatalf("%+v", resp)
 		}
+	})
+}
+
+func TestExportRoutings(t *testing.T) {
+	discoverSuit := &DiscoverTestSuit{}
+	if err := discoverSuit.Initialize(); err != nil {
+		t.Fatal(err)
+	}
+	defer discoverSuit.Destroy()
+
+	t.Run("导出不存在的路由配置", func(t *testing.T) {
+		req := discoverSuit.createCommonRoutingConfigV2(t, 1)
+		defer discoverSuit.cleanCommonRoutingConfigV2(req)
+		qResp := discoverSuit.DiscoverServer().ExportRoutings(discoverSuit.DefaultCtx,
+			map[string]string{"id": "not_exsit_id"})
+		assert.NotEqual(t, uint32(apimodel.Code_ExecuteSuccess), qResp.GetCode().GetValue())
+	})
+
+	t.Run("正常导出路由配置", func(t *testing.T) {
+		req := discoverSuit.createCommonRoutingConfigV2(t, 1)
+		defer discoverSuit.cleanCommonRoutingConfigV2(req)
+
+		qResp := discoverSuit.DiscoverServer().ExportRoutings(discoverSuit.DefaultCtx,
+			map[string]string{"name": "test-routing-name-0"})
+		assert.Equal(t, uint32(apimodel.Code_ExecuteSuccess), qResp.GetCode().GetValue())
+		assert.Greater(t, len(qResp.GetInfo().GetValue()), 0)
+	})
+}
+
+func TestImportRoutings(t *testing.T) {
+	discoverSuit := &DiscoverTestSuit{}
+	if err := discoverSuit.Initialize(); err != nil {
+		t.Fatal(err)
+	}
+	defer discoverSuit.Destroy()
+
+	t.Run("测试导入路由配置", func(t *testing.T) {
+		req := discoverSuit.createCommonRoutingConfigV2(t, 1)
+		defer discoverSuit.cleanCommonRoutingConfigV2(req)
+		// 使用export的输出作为import的输入
+		qResp := discoverSuit.DiscoverServer().ExportRoutings(discoverSuit.DefaultCtx,
+			map[string]string{"name": "test-routing-name-0"})
+		rsp := discoverSuit.DiscoverServer().ImportRoutings(discoverSuit.DefaultCtx,
+			[]*apiconfig.ConfigFile{{
+				Content: qResp.GetInfo(),
+			}},
+		)
+		assert.Equal(t, uint32(apimodel.Code_ExecuteSuccess), rsp.GetCode().GetValue())
 	})
 }
 

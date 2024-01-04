@@ -20,12 +20,12 @@ package xdsserverv3
 import (
 	"errors"
 	"strconv"
+	"sync"
 	"time"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	"github.com/envoyproxy/go-control-plane/pkg/cache/types"
 	cachev3 "github.com/envoyproxy/go-control-plane/pkg/cache/v3"
-	resourcev3 "github.com/envoyproxy/go-control-plane/pkg/resource/v3"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 
@@ -37,6 +37,15 @@ import (
 	"github.com/polarismesh/polaris/service"
 )
 
+var (
+	ErrorNoSupportXDSType = errors.New("unsupport xds build type")
+)
+
+type (
+	ServiceInfos map[string]map[model.ServiceKey]*resource.ServiceInfo
+	XDSGenerate  func(xdsType resource.XDSType, opt *resource.BuildOption)
+)
+
 // XdsResourceGenerator is the xDS resource generator
 type XdsResourceGenerator struct {
 	namingServer service.DiscoverServer
@@ -46,199 +55,161 @@ type XdsResourceGenerator struct {
 }
 
 func (x *XdsResourceGenerator) Generate(versionLocal string,
-	registryInfo map[string]map[model.ServiceKey]*resource.ServiceInfo) {
+	needUpdate, needRemove ServiceInfos) {
 
-	// 如果没有任何一个 XDS Node 接入则不会生成与 Node 有关的 XDS Resource
-	if x.xdsNodesMgr.HasEnvoyNodes() {
-		// 只构建 Sidecar 特有的 XDS 数据
-		_ = x.buildSidecarXDSCache(registryInfo)
-	}
-
-	// CDS/EDS/VHDS 一起构建
-	for namespace, services := range registryInfo {
-		opt := &resource.BuildOption{
-			RunType:          resource.RunTypeSidecar,
-			Namespace:        namespace,
-			Services:         services,
-			TrafficDirection: corev3.TrafficDirection_OUTBOUND,
-			TLSMode:          resource.TLSModeNone,
+	deltaOp := func(runType resource.RunType, infos ServiceInfos, f XDSGenerate) {
+		direction := corev3.TrafficDirection_OUTBOUND
+		if runType == resource.RunTypeGateway {
+			direction = corev3.TrafficDirection_INBOUND
 		}
-		x.buildAndDeltaUpdate(resource.RDS, opt)
-		x.buildAndDeltaUpdate(resource.EDS, opt)
-		x.buildAndDeltaUpdate(resource.VHDS, opt)
-		// 默认构建没有设置 TLS 的 CDS 资源
-		x.buildAndDeltaUpdate(resource.CDS, opt)
+		// CDS/EDS/VHDS 一起构建
+		for namespace, services := range infos {
+			opt := &resource.BuildOption{
+				RunType:          runType,
+				Namespace:        namespace,
+				Services:         services,
+				TrafficDirection: direction,
+				TLSMode:          resource.TLSModeNone,
+			}
+			f(resource.RDS, opt)
+			f(resource.EDS, opt)
+			f(resource.VHDS, opt)
 
-		// 构建设置了 TLS Mode == Strict 的 CDS 资源
-		opt.TLSMode = resource.TLSModeStrict
-		x.buildAndDeltaUpdate(resource.CDS, opt)
-		// 构建设置了 TLS Mode == Permissive 的 CDS 资源
-		opt.TLSMode = resource.TLSModePermissive
-		x.buildAndDeltaUpdate(resource.CDS, opt)
+			// 默认构建没有设置 TLS 的 CDS 资源
+			f(resource.CDS, opt)
+			// 构建设置了 TLS Mode == Strict 的 CDS 资源
+			opt.TLSMode = resource.TLSModeStrict
+			f(resource.CDS, opt)
+			// 构建设置了 TLS Mode == Permissive 的 CDS 资源
+			opt.TLSMode = resource.TLSModePermissive
+			f(resource.CDS, opt)
+			// 构建支持按需加载
+			opt.OpenOnDemand = true
+			f(resource.RDS, opt)
+
+			if runType == resource.RunTypeSidecar {
+				for svcKey := range services {
+					// 换成 INBOUND 构建 CDS、EDS、RDS
+					opt.SelfService = svcKey
+					opt.TrafficDirection = corev3.TrafficDirection_INBOUND
+					opt.TLSMode = resource.TLSModeNone
+					f(resource.EDS, opt)
+					f(resource.RDS, opt)
+					// 默认构建没有设置 TLS 的 CDS 资源
+					f(resource.CDS, opt)
+					// 构建设置了 TLS Mode == Strict 的 CDS 资源
+					opt.TLSMode = resource.TLSModeStrict
+					f(resource.CDS, opt)
+					// 构建设置了 TLS Mode == Permissive 的 CDS 资源
+					opt.TLSMode = resource.TLSModePermissive
+					f(resource.CDS, opt)
+					// 构建支持按需加载
+					opt.OpenOnDemand = true
+					f(resource.RDS, opt)
+				}
+			}
+		}
 	}
+
+	wg := &sync.WaitGroup{}
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+
+		// 处理 Sideacr
+		deltaOp(resource.RunTypeSidecar, needUpdate, x.buildAndDeltaUpdate)
+		deltaOp(resource.RunTypeSidecar, needRemove, x.buildAndDeltaRemove)
+	}()
+
+	go func() {
+		defer wg.Done()
+
+		// 处理 Gateway
+		deltaOp(resource.RunTypeGateway, needUpdate, x.buildAndDeltaUpdate)
+		deltaOp(resource.RunTypeGateway, needRemove, x.buildAndDeltaRemove)
+	}()
+
+	wg.Wait()
 }
 
-func (x *XdsResourceGenerator) buildAndDeltaUpdate(xdsType resource.XDSType, opt *resource.BuildOption) {
+func (x *XdsResourceGenerator) buildOneEnvoyXDSCache(node *resource.XDSClient) error {
+	opt := &resource.BuildOption{
+		RunType:      node.RunType,
+		Client:       node,
+		TLSMode:      node.TLSMode,
+		Namespace:    node.GetSelfNamespace(),
+		OpenOnDemand: node.OpenOnDemand,
+		SelfService: model.ServiceKey{
+			Namespace: node.GetSelfNamespace(),
+			Name:      node.GetSelfService(),
+		},
+	}
+
+	opt.TrafficDirection = corev3.TrafficDirection_OUTBOUND
+	// 构建 OUTBOUND LDS 资源
+	x.buildAndDeltaUpdate(resource.LDS, opt)
+	opt.TrafficDirection = corev3.TrafficDirection_INBOUND
+	// 构建 INBOUND LDS 资源
+	x.buildAndDeltaUpdate(resource.LDS, opt)
+	return nil
+}
+
+func (x *XdsResourceGenerator) buildAndDeltaRemove(xdsType resource.XDSType, opt *resource.BuildOption) {
+	opt.ForceDelete = true
 	xxds, err := x.generateXDSResource(xdsType, opt)
 	if err != nil {
-		log.Error("[XDS][Sidecar] build common fail", zap.String("type", xdsType.String()), zap.Error(err))
+		log.Error("[XDS][Envoy] generate xds resource fail", zap.String("type", xdsType.String()), zap.Error(err))
 		return
 	}
 
 	typeUrl := xdsType.ResourceType()
-	cacheKey := xdsType.ResourceType() + "~" + opt.Namespace
-	if opt.TLSMode != resource.TLSModeNone {
-		cacheKey = cacheKey + "~" + string(opt.TLSMode)
+	client := opt.Client
+	if client == nil {
+		client = &resource.XDSClient{
+			TLSMode:   opt.TLSMode,
+			Namespace: opt.Namespace,
+		}
 	}
-	// 与 XDS Node 有关的全部都有单独的 Cache 缓存处理
-	if opt.Client != nil {
-		cacheKey = xdsType.ResourceType() + "~" + opt.Client.Node.Id
-	}
-
-	if err := x.cache.DeltaUpdateResource(cacheKey, typeUrl, cachev3.IndexRawResourcesByName(xxds)); err != nil {
-		log.Error("[XDS][Sidecar] delta update fail", zap.String("cache-key", cacheKey),
+	cacheKey := cache.BuildCacheKey(typeUrl, opt.TLSMode, client)
+	if err := x.cache.DeltaRemoveResource(cacheKey, typeUrl, cachev3.IndexRawResourcesByName(xxds)); err != nil {
+		log.Error("[XDS][Envoy] delta update fail", zap.String("cache-key", cacheKey),
 			zap.String("type", xdsType.String()), zap.Error(err))
 		return
 	}
 }
 
-func (x *XdsResourceGenerator) buildSidecarXDSCache(registryInfo map[string]map[model.ServiceKey]*resource.ServiceInfo) error {
-
-	nodes := x.xdsNodesMgr.ListSidecarNodes()
-	if len(nodes) == 0 || len(registryInfo) == 0 {
-		// 如果没有任何一个 XDS Sidecar Node 客户端，不做任何操作
-		log.Info("[XDS][Sidecar] xds nodes or registryInfo is empty", zap.Int("nodes", len(nodes)),
-			zap.Int("register", len(registryInfo)))
-		return nil
-	}
-
-	for i := range nodes {
-		node := nodes[i]
-		xdsNode := node
-		opt := &resource.BuildOption{
-			RunType:        resource.RunTypeSidecar,
-			Client:         xdsNode,
-			TLSMode:        node.TLSMode,
-			Namespace:      xdsNode.GetSelfNamespace(),
-			OpenOnDemand:   xdsNode.OpenOnDemand,
-			OnDemandServer: xdsNode.OnDemandServer,
-			SelfService: model.ServiceKey{
-				Namespace: xdsNode.GetSelfNamespace(),
-				Name:      xdsNode.GetSelfService(),
-			},
-		}
-
-		opt.TrafficDirection = corev3.TrafficDirection_OUTBOUND
-		// 构建 INBOUND LDS 资源
-		x.buildAndDeltaUpdate(resource.LDS, opt)
-		// 构建 INBOUND RDS 资源
-		x.buildAndDeltaUpdate(resource.RDS, opt)
-		opt.TrafficDirection = corev3.TrafficDirection_INBOUND
-		// 构建 INBOUND LDS 资源
-		x.buildAndDeltaUpdate(resource.LDS, opt)
-		// 构建 INBOUND EDS 资源
-		x.buildAndDeltaUpdate(resource.EDS, opt)
-		// 构建 INBOUND RDS 资源
-		x.buildAndDeltaUpdate(resource.RDS, opt)
-	}
-	return nil
-}
-
-// buildGatewayXDSCache 网关场景是允许跨命名空间直接进行访问
-func (x *XdsResourceGenerator) buildGatewayXDSCache(versionLocal string,
-	registryInfo map[string]map[model.ServiceKey]*resource.ServiceInfo) error {
-
-	nodes := x.xdsNodesMgr.ListGatewayNodes()
-	if len(nodes) == 0 || len(registryInfo) == 0 {
-		// 如果没有任何一个 XDS Gateway Node 客户端，不做任何操作
-		log.Info("[XDS][Gateway][V2] xds nodes or registryInfo is empty", zap.Int("nodes", len(nodes)),
-			zap.Int("registr", len(registryInfo)))
-		return nil
-	}
-
-	alreadyMakeCache := map[string]struct{}{}
-	for i := range nodes {
-		node := nodes[i]
-		cacheKey := (resource.PolarisNodeHash{}).ID(node.Node)
-		if _, exist := alreadyMakeCache[cacheKey]; exist {
-			continue
-		}
-		alreadyMakeCache[cacheKey] = struct{}{}
-		if err := x.makeGatewaySnapshot(node, node.TLSMode, versionLocal, registryInfo); err != nil {
-			log.Error("[XDS][Gateway][V2] make snapshot fail", zap.String("cacheKey", cacheKey),
-				zap.Error(err))
-		}
-	}
-	return nil
-}
-
-// makeGatewaySnapshot nodeId must be like gateway~namespace
-func (x *XdsResourceGenerator) makeGatewaySnapshot(xdsNode *resource.XDSClient, tlsMode resource.TLSMode,
-	version string, registryInfo map[string]map[model.ServiceKey]*resource.ServiceInfo) error {
-
-	opt := &resource.BuildOption{
-		TLSMode: tlsMode,
-	}
-	var (
-		allEndpoints []types.Resource
-		allClusters  []types.Resource
-		allRouters   []types.Resource
-	)
-	for namespace, services := range registryInfo {
-		opt.Services = services
-		opt.Namespace = namespace
-		// 构建 endpoints XDS 资源缓存数据，这里不需要下发网关的自己的
-		endpoints, err := x.generateXDSResource(resource.EDS, opt)
-		if err != nil {
-			return err
-		}
-		allEndpoints = append(allEndpoints, endpoints...)
-		// 构建 cluster XDS 资源缓存数据
-		clusters, err := x.generateXDSResource(resource.CDS, opt)
-		if err != nil {
-			return err
-		}
-		allClusters = append(allClusters, clusters...)
-		// 构建 route XDS 资源缓存
-		routers, err := x.generateXDSResource(resource.RDS, opt)
-		if err != nil {
-			return err
-		}
-		allRouters = append(allRouters, routers...)
-	}
-
-	// 构建 listener XDS 资源缓存
-	listeners, err := x.generateXDSResource(resource.LDS, opt)
+func (x *XdsResourceGenerator) buildAndDeltaUpdate(xdsType resource.XDSType, opt *resource.BuildOption) {
+	opt.ForceDelete = false
+	xxds, err := x.generateXDSResource(xdsType, opt)
 	if err != nil {
-		return err
+		log.Error("[XDS][Envoy] generate xds resource fail", zap.String("type", xdsType.String()), zap.Error(err))
+		return
 	}
 
-	resources := make(map[resourcev3.Type][]types.Resource)
-	resources[resourcev3.EndpointType] = allEndpoints
-	resources[resourcev3.ClusterType] = allClusters
-	resources[resourcev3.RouteType] = allRouters
-	resources[resourcev3.ListenerType] = listeners
-	cacheKey := (resource.PolarisNodeHash{}).ID(xdsNode.Node)
-
-	for typeUrl, resources := range resources {
-		if err := x.cache.DeltaUpdateResource(xdsNode.Node.Id, typeUrl, cachev3.IndexRawResourcesByName(resources)); err != nil {
-			// TODO: need log
+	typeUrl := xdsType.ResourceType()
+	client := opt.Client
+	if client == nil {
+		client = &resource.XDSClient{
+			TLSMode:   opt.TLSMode,
+			Namespace: opt.Namespace,
 		}
 	}
-	// 为每个 nodeId 刷写 cache ，推送 xds 更新
-	log.Info("[XDS][Gateway] upsert xds resource success", zap.String("cacheKey", cacheKey))
-	return nil
+	cacheKey := cache.BuildCacheKey(typeUrl, opt.TLSMode, client)
+	if err = x.cache.DeltaUpdateResource(cacheKey, typeUrl, cachev3.IndexRawResourcesByName(xxds)); err != nil {
+		log.Error("[XDS][Envoy] delta update fail", zap.String("cache-key", cacheKey),
+			zap.String("type", xdsType.String()), zap.Error(err))
+	}
 }
 
 func (x *XdsResourceGenerator) generateXDSResource(xdsType resource.XDSType,
 	opt *resource.BuildOption) ([]types.Resource, error) {
 
-	// TODO 需要预埋相关 XDS 资源生成时间开销
+	// 需要预埋相关 XDS 资源生成时间开销
 	start := time.Now()
 	defer func() {
 		plugin.GetStatis().ReportCallMetrics(metrics.CallMetric{
 			Type:     metrics.XDSResourceBuildCallMetric,
-			API:      string(xdsType),
+			API:      xdsType.String(),
 			Protocol: "XDS",
 			Times:    1,
 			Duration: time.Since(start),
@@ -264,7 +235,7 @@ func (x *XdsResourceGenerator) generateXDSResource(xdsType resource.XDSType,
 	case resource.VHDS:
 		xdsBuilder = &VHDSBuilder{}
 	default:
-		return nil, errors.New("unsupport xds build type")
+		return nil, ErrorNoSupportXDSType
 	}
 
 	// 构建 XDS 资源缓存数据

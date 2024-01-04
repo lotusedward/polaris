@@ -20,6 +20,7 @@ package service
 import (
 	"context"
 
+	apiconfig "github.com/polarismesh/specification/source/go/api/v1/config_manage"
 	apifault "github.com/polarismesh/specification/source/go/api/v1/fault_tolerance"
 	apiservice "github.com/polarismesh/specification/source/go/api/v1/service_manage"
 	apitraffic "github.com/polarismesh/specification/source/go/api/v1/traffic_manage"
@@ -76,6 +77,10 @@ type CircuitBreakerOperateServer interface {
 	UpdateCircuitBreakerRules(ctx context.Context, request []*apifault.CircuitBreakerRule) *apiservice.BatchWriteResponse
 	// GetCircuitBreakerRules Query CircuitBreaker rules
 	GetCircuitBreakerRules(ctx context.Context, query map[string]string) *apiservice.BatchQueryResponse
+	// ExportCircuitBreakerRules Export CircuitBreaker rules
+	ExportCircuitBreakerRules(ctx context.Context, query map[string]string) *apiservice.BatchQueryResponse
+	// ImportCircuitBreakerRules Import CircuitBreaker rules
+	ImportCircuitBreakerRules(ctx context.Context, configFiles []*apiconfig.ConfigFile) *apiservice.BatchWriteResponse
 }
 
 // RateLimitOperateServer Lamflow rule related operation
@@ -90,6 +95,10 @@ type RateLimitOperateServer interface {
 	UpdateRateLimits(ctx context.Context, request []*apitraffic.Rule) *apiservice.BatchWriteResponse
 	// GetRateLimits Query RateLimit rules
 	GetRateLimits(ctx context.Context, query map[string]string) *apiservice.BatchQueryResponse
+	// ExportRateLimits Export RateLimit rules
+	ExportRateLimits(ctx context.Context, query map[string]string) *apiservice.BatchQueryResponse
+	// ImportRateLimits Import RateLimit rules
+	ImportRateLimits(ctx context.Context, configFiles []*apiconfig.ConfigFile) *apiservice.BatchWriteResponse
 }
 
 // RouteRuleOperateServer Routing rules related operations
@@ -182,6 +191,8 @@ type ClientServer interface {
 	GetFaultDetectWithCache(ctx context.Context, req *apiservice.Service) *apiservice.DiscoverResponse
 	// UpdateInstance update one instance by client
 	UpdateInstance(ctx context.Context, req *apiservice.Instance) *apiservice.Response
+	// ReportServiceContract client report service_contract
+	ReportServiceContract(ctx context.Context, req *apiservice.ServiceContract) *apiservice.Response
 }
 
 // L5OperateServer L5 related operations
@@ -210,6 +221,10 @@ type RouterRuleOperateServer interface {
 	QueryRoutingConfigsV2(ctx context.Context, query map[string]string) *apiservice.BatchQueryResponse
 	// EnableRoutings batch enable routing rules
 	EnableRoutings(ctx context.Context, req []*apitraffic.RouteRule) *apiservice.BatchWriteResponse
+	// ExportRoutings batch export routing rules
+	ExportRoutings(ctx context.Context, query map[string]string) *apiservice.BatchQueryResponse
+	// ImportRoutings batch Import routing rules
+	ImportRoutings(ctx context.Context, configFiles []*apiconfig.ConfigFile) *apiservice.BatchWriteResponse
 }
 
 // FaultDetectRuleOperateServer Fault detect rules related operations

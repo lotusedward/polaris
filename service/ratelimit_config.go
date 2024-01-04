@@ -18,18 +18,23 @@
 package service
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strconv"
 	"time"
 
 	"github.com/gogo/protobuf/jsonpb"
 	"github.com/golang/protobuf/ptypes"
+	apiconfig "github.com/polarismesh/specification/source/go/api/v1/config_manage"
 	apimodel "github.com/polarismesh/specification/source/go/api/v1/model"
 	apiservice "github.com/polarismesh/specification/source/go/api/v1/service_manage"
 	apitraffic "github.com/polarismesh/specification/source/go/api/v1/traffic_manage"
 
+	"github.com/ghodss/yaml"
 	cachetypes "github.com/polarismesh/polaris/cache/api"
 	api "github.com/polarismesh/polaris/common/api/v1"
 	"github.com/polarismesh/polaris/common/model"
@@ -284,6 +289,79 @@ func (s *Server) GetRateLimits(ctx context.Context, query map[string]string) *ap
 	}
 
 	return out
+}
+
+// ExportRateLimits 导出限流规则
+func (s *Server) ExportRateLimits(ctx context.Context, query map[string]string) *apiservice.BatchQueryResponse {
+	ret := s.GetRateLimits(ctx, query)
+	if ret.GetCode().GetValue() != uint32(apimodel.Code_ExecuteSuccess) {
+		return api.NewBatchQueryResponse(apimodel.Code(ret.GetCode().GetValue()))
+	} else if len(ret.GetRateLimits()) == 0 {
+		return api.NewBatchQueryResponse(apimodel.Code_NotFoundRateLimit)
+	}
+
+	buf := new(bytes.Buffer)
+	w := zip.NewWriter(buf)
+	for _, data := range ret.GetRateLimits() {
+		if byMsg, err := yaml.Marshal(data); err != nil {
+			return api.NewBatchQueryResponse(apimodel.Code_ParseException)
+		} else if f, err := w.Create(fmt.Sprint(data.Name, ".yaml")); err != nil {
+			return api.NewBatchQueryResponse(apimodel.Code_ParseException)
+		} else if _, err := f.Write(byMsg); err != nil {
+			return api.NewBatchQueryResponse(apimodel.Code_ParseException)
+		}
+	}
+	w.Close()
+	return api.NewBatchQueryResponseWithMsg(apimodel.Code_ExecuteSuccess, buf.String())
+}
+
+// ImportRateLimits 导入限流规则
+func (s *Server) ImportRateLimits(ctx context.Context, configFiles []*apiconfig.ConfigFile) *apiservice.BatchWriteResponse {
+	var exists, news []*apitraffic.Rule
+	for _, file := range configFiles {
+		byValue := file.GetContent().GetValue()
+		zr, err := zip.NewReader(bytes.NewReader([]byte(byValue)), int64(len(byValue)))
+		if err != nil {
+			log.Errorf("%+v", err)
+			continue
+		}
+		for _, file := range zr.File {
+			f, err := file.Open()
+			if err != nil {
+				log.Errorf("file.Open err: %+v", err)
+				continue
+			}
+			byData, err := io.ReadAll(f)
+			if err != nil {
+				log.Errorf("io.ReadAll err: %+v", err)
+				continue
+			}
+			rule := &apitraffic.Rule{}
+			if err := yaml.Unmarshal(byData, rule); err != nil {
+				log.Errorf("unmarshal circuitbreaker file fail: %+v, content: %+v", err, byData)
+				continue
+			}
+			param := map[string]string{"id": rule.Id.GetValue()}
+			if resp := s.GetRateLimits(ctx, param); resp.GetAmount().GetValue() == 0 {
+				news = append(news, rule)
+				continue
+			}
+			exists = append(exists, rule)
+		}
+	}
+
+	var ret = &apiservice.BatchWriteResponse{}
+	if len(news) > 0 {
+		ret = s.CreateRateLimits(ctx, news)
+		api.FormatBatchWriteResponse(ret)
+	}
+
+	if len(exists) > 0 {
+		ret = s.UpdateRateLimits(ctx, exists)
+		api.FormatBatchWriteResponse(ret)
+	}
+
+	return ret
 }
 
 func parseRateLimitArgs(query map[string]string) (*cachetypes.RateLimitRuleArgs, *apiservice.BatchQueryResponse) {

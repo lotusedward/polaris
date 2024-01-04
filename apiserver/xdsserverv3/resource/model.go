@@ -18,8 +18,6 @@
 package resource
 
 import (
-	"os"
-
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	resourcev3 "github.com/envoyproxy/go-control-plane/pkg/resource/v3"
 	"github.com/polarismesh/specification/source/go/api/v1/fault_tolerance"
@@ -28,6 +26,10 @@ import (
 	"github.com/polarismesh/specification/source/go/api/v1/traffic_manage"
 
 	"github.com/polarismesh/polaris/common/model"
+)
+
+const (
+	EnvoyHttpFilter_OnDemand = "envoy.filters.http.on_demand"
 )
 
 const (
@@ -55,12 +57,12 @@ var (
 )
 
 func Init() {
-	if val := os.Getenv("ENVOY_ODCDS_LUA_SCRIPT"); val != "" {
-		defaultOdcdsLuaScriptFile = val
-	}
-	code, _ := os.ReadFile(defaultOdcdsLuaScriptFile)
-	odcdsLuaCode = string(code)
-	log.Infof("[XDSV3][ODCDS] lua script path :%s content\n%s\n", defaultOdcdsLuaScriptFile, odcdsLuaCode)
+	// if val := os.Getenv("ENVOY_ODCDS_LUA_SCRIPT"); val != "" {
+	// 	defaultOdcdsLuaScriptFile = val
+	// }
+	// code, _ := os.ReadFile(defaultOdcdsLuaScriptFile)
+	// odcdsLuaCode = string(code)
+	// log.Infof("[XDSV3][ODCDS] lua script path :%s content\n%s\n", defaultOdcdsLuaScriptFile, odcdsLuaCode)
 }
 
 var (
@@ -81,7 +83,27 @@ const (
 	RLS
 	SDS
 	VHDS
+	UnknownXDS
 )
+
+func FormatTypeUrl(typeUrl string) XDSType {
+	switch typeUrl {
+	case resourcev3.ListenerType:
+		return LDS
+	case resourcev3.RouteType:
+		return RDS
+	case resourcev3.EndpointType:
+		return EDS
+	case resourcev3.ClusterType:
+		return CDS
+	case resourcev3.RateLimitConfigType:
+		return RLS
+	case resourcev3.VirtualHostType:
+		return VHDS
+	default:
+		return UnknownXDS
+	}
+}
 
 func (x XDSType) ResourceType() resourcev3.Type {
 	if x == LDS {
@@ -141,6 +163,10 @@ const (
 	TLSModeStrict     TLSMode = "strict"
 	TLSModePermissive TLSMode = "permissive"
 )
+
+func EnableTLS(t TLSMode) bool {
+	return t == TLSModePermissive || t == TLSModeStrict
+}
 
 const (
 	// 这个是特殊指定的 prefix

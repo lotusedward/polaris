@@ -19,13 +19,9 @@ package v1
 
 import (
 	"context"
-	"fmt"
-	"io/fs"
 	"net/http"
-	"os"
 
 	"github.com/emicklei/go-restful/v3"
-	"github.com/ghodss/yaml"
 	"github.com/golang/protobuf/proto"
 	apifault "github.com/polarismesh/specification/source/go/api/v1/fault_tolerance"
 	apimodel "github.com/polarismesh/specification/source/go/api/v1/model"
@@ -35,8 +31,6 @@ import (
 	httpcommon "github.com/polarismesh/polaris/apiserver/httpserver/utils"
 	api "github.com/polarismesh/polaris/common/api/v1"
 	"github.com/polarismesh/polaris/common/utils"
-	protoV2 "google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/anypb"
 )
 
 // CreateNamespaces 创建命名空间
@@ -757,26 +751,11 @@ func (h *HTTPServerV1) ExportRateLimits(req *restful.Request, rsp *restful.Respo
 		Response: rsp,
 	}
 	queryParams := httpcommon.ParseQueryParams(req)
-	ret := h.namingServer.GetRateLimits(handler.ParseHeaderContext(), queryParams)
-	if ret.GetCode().GetValue() != uint32(apimodel.Code_ExecuteSuccess) {
-		handler.WriteHeaderAndProto(ret)
-		return
-	} else if len(ret.GetRateLimits()) == 0 {
-		handler.WriteHeaderAndProto(api.NewBatchQueryResponse(apimodel.Code_NotFoundRateLimit))
-		return
-	}
-
-	for _, data := range ret.GetRateLimits() {
-		if byMsg, err := yaml.Marshal(data); err != nil {
-			handler.WriteHeaderAndProto(api.NewBatchQueryResponseWithMsg(apimodel.Code_ParseException, err.Error()))
-			return
-		} else if err := os.WriteFile(fmt.Sprintf("ratelimit_%s.yaml", data.GetId().GetValue()), byMsg, fs.ModePerm); err != nil {
-			handler.WriteHeaderAndProto(api.NewBatchQueryResponseWithMsg(apimodel.Code_ParseException, err.Error()))
-			return
-		}
-	}
-
-	handler.WriteHeaderAndProto(api.NewBatchQueryResponseWithMsg(apimodel.Code_ExecuteSuccess, "已生成yaml配置"))
+	ret := h.namingServer.ExportRateLimits(handler.ParseHeaderContext(), queryParams)
+	handler.WriteHeaderAndProto(ret)
+	handler.Response.AddHeader("Content-Type", "application/zip")
+	handler.Response.AddHeader("Content-Disposition", "attachment; filename=ratelimits.zip")
+	handler.Response.ResponseWriter.Write([]byte(ret.GetInfo().GetValue()))
 }
 
 // ImportRateLimits 导入限流规则
@@ -786,39 +765,14 @@ func (h *HTTPServerV1) ImportRateLimits(req *restful.Request, rsp *restful.Respo
 		Response: rsp,
 	}
 
-	var rateLimits RateLimitArr
-	ctx, err := handler.ParseArray(func() proto.Message {
-		msg := &apitraffic.Rule{}
-		rateLimits = append(rateLimits, msg)
-		return msg
-	})
+	ctx := handler.ParseHeaderContext()
+	configFiles, err := handler.ParseFile()
 	if err != nil {
 		handler.WriteHeaderAndProto(api.NewBatchWriteResponseWithMsg(apimodel.Code_ParseException, err.Error()))
 		return
 	}
-
-	var exists, news RateLimitArr
-	for _, rule := range rateLimits {
-		param := map[string]string{"id": rule.Id.GetValue()}
-		if resp := h.namingServer.GetRateLimits(ctx, param); resp.GetAmount().GetValue() == 0 {
-			news = append(news, rule)
-			continue
-		}
-		exists = append(exists, rule)
-	}
-
-	var ret = &apiservice.BatchWriteResponse{}
-	if len(news) > 0 {
-		ret = h.namingServer.CreateRateLimits(ctx, news)
-		api.FormatBatchWriteResponse(ret)
-	}
-
-	if len(exists) > 0 {
-		ret = h.namingServer.UpdateRateLimits(ctx, exists)
-		api.FormatBatchWriteResponse(ret)
-	}
-
-	handler.WriteHeaderAndProto(ret)
+	response := h.namingServer.ImportRateLimits(ctx, configFiles)
+	handler.WriteHeaderAndProto(response)
 }
 
 // CreateCircuitBreakers 创建熔断规则
@@ -1185,31 +1139,13 @@ func (h *HTTPServerV1) ExportCircuitBreakerRules(req *restful.Request, rsp *rest
 		Request:  req,
 		Response: rsp,
 	}
+	ctx := handler.ParseHeaderContext()
 	queryParams := httpcommon.ParseQueryParams(req)
-	ret := h.namingServer.GetCircuitBreakerRules(handler.ParseHeaderContext(), queryParams)
-	if ret.GetCode().GetValue() != uint32(apimodel.Code_ExecuteSuccess) {
-		handler.WriteHeaderAndProto(ret)
-		return
-	} else if len(ret.GetData()) == 0 {
-		handler.WriteHeaderAndProto(api.NewBatchQueryResponse(apimodel.Code_NotFoundCircuitBreaker))
-		return
-	}
-
-	for _, data := range ret.GetData() {
-		msg := &apifault.CircuitBreakerRule{}
-		if err := anypb.UnmarshalTo(data, proto.MessageV2(msg), protoV2.UnmarshalOptions{}); err != nil {
-			handler.WriteHeaderAndProto(api.NewBatchQueryResponseWithMsg(apimodel.Code_ParseException, err.Error()))
-			return
-		} else if byMsg, err := yaml.Marshal(msg); err != nil {
-			handler.WriteHeaderAndProto(api.NewBatchQueryResponseWithMsg(apimodel.Code_ParseException, err.Error()))
-			return
-		} else if err := os.WriteFile(fmt.Sprintf("circuitbreaker_%s.yaml", msg.GetId()), byMsg, fs.ModePerm); err != nil {
-			handler.WriteHeaderAndProto(api.NewBatchQueryResponseWithMsg(apimodel.Code_ParseException, err.Error()))
-			return
-		}
-	}
-
-	handler.WriteHeaderAndProto(api.NewBatchQueryResponseWithMsg(apimodel.Code_ExecuteSuccess, "已生成yaml配置"))
+	ret := h.namingServer.ExportCircuitBreakerRules(ctx, queryParams)
+	handler.WriteHeader(api.ExecuteSuccess, http.StatusOK)
+	handler.Response.AddHeader("Content-Type", "application/zip")
+	handler.Response.AddHeader("Content-Disposition", "attachment; filename=circuitbreakrules.zip")
+	handler.Response.ResponseWriter.Write([]byte(ret.GetInfo().GetValue()))
 }
 
 // ImportCircuitBreakerRules import the circuitbreaker rues
@@ -1219,39 +1155,22 @@ func (h *HTTPServerV1) ImportCircuitBreakerRules(req *restful.Request, rsp *rest
 		Response: rsp,
 	}
 
-	var circuitBreakerRules CircuitBreakerRuleAttr
-	ctx, err := handler.ParseArray(func() proto.Message {
-		msg := &apifault.CircuitBreakerRule{}
-		circuitBreakerRules = append(circuitBreakerRules, msg)
-		return msg
-	})
+	ctx := handler.ParseHeaderContext()
+	configFiles, err := handler.ParseFile()
 	if err != nil {
 		handler.WriteHeaderAndProto(api.NewBatchWriteResponseWithMsg(apimodel.Code_ParseException, err.Error()))
 		return
 	}
-
-	var exists, news CircuitBreakerRuleAttr
-	for _, rule := range circuitBreakerRules {
-		param := map[string]string{"id": rule.GetId()}
-		if resp := h.namingServer.GetCircuitBreakerRules(ctx, param); resp.GetAmount().GetValue() == 0 {
-			news = append(news, rule)
-			continue
+	namespace := handler.Request.QueryParameter("namespace")
+	group := handler.Request.QueryParameter("group")
+	for _, file := range configFiles {
+		file.Namespace = utils.NewStringValue(namespace)
+		if group != "" {
+			file.Group = utils.NewStringValue(group)
 		}
-		exists = append(exists, rule)
 	}
-
-	var ret = &apiservice.BatchWriteResponse{}
-	if len(news) > 0 {
-		ret = h.namingServer.CreateCircuitBreakerRules(ctx, news)
-		api.FormatBatchWriteResponse(ret)
-	}
-
-	if len(exists) > 0 {
-		ret = h.namingServer.UpdateCircuitBreakerRules(ctx, exists)
-		api.FormatBatchWriteResponse(ret)
-	}
-
-	handler.WriteHeaderAndProto(ret)
+	response := h.namingServer.ImportCircuitBreakerRules(ctx, configFiles)
+	handler.WriteHeaderAndProto(response)
 }
 
 // CreateFaultDetectRules create the fault detect rues
