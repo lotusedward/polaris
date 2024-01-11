@@ -116,16 +116,17 @@ func ResourceOfConfigFile(group, name string) string {
 }
 
 const (
-	ActionGetConfigFile          = "GET_CONFIG_FILE"
-	ActionListConfigFiles        = "LIST_CONFIG_FILES"
-	ActionListConfigGroups       = "LIST_CONFIG_GROUPS"
-	ActionPublishConfigFile      = "PUBLISH_CONFIG_FILE"
-	ActionDiscoverInstance       = "DISCOVER_INSTANCE"
-	ActionDiscoverServices       = "DISCOVER_SERVICES"
-	ActionDiscoverRouterRule     = "DISCOVER_ROUTER_RULE"
-	ActionDiscoverRateLimit      = "DISCOVER_RATE_LIMIT"
-	ActionDiscoverCircuitBreaker = "DISCOVER_CIRCUIT_BREAKER"
-	ActionDiscoverFaultDetect    = "DISCOVER_FAULT_DETECT"
+	ActionGetConfigFile           = "GET_CONFIG_FILE"
+	ActionListConfigFiles         = "LIST_CONFIG_FILES"
+	ActionListConfigGroups        = "LIST_CONFIG_GROUPS"
+	ActionPublishConfigFile       = "PUBLISH_CONFIG_FILE"
+	ActionDiscoverInstance        = "DISCOVER_INSTANCE"
+	ActionDiscoverServices        = "DISCOVER_SERVICES"
+	ActionDiscoverRouterRule      = "DISCOVER_ROUTER_RULE"
+	ActionDiscoverRateLimit       = "DISCOVER_RATE_LIMIT"
+	ActionDiscoverCircuitBreaker  = "DISCOVER_CIRCUIT_BREAKER"
+	ActionDiscoverFaultDetect     = "DISCOVER_FAULT_DETECT"
+	ActionDiscoverServiceContract = "DISCOVER_SERVICE_CONTRACT"
 )
 
 type ClientDiscoverMetric struct {
@@ -140,8 +141,12 @@ type ClientDiscoverMetric struct {
 }
 
 func (c ClientDiscoverMetric) String() string {
-	return fmt.Sprintf("%s|%s|%s|%s|%s|%s|%d|%+v", c.ClientIP, c.Action, c.Namespace, c.Resource,
-		c.Revision, time.Unix(c.Timestamp, 0).Format("2006-01-02 15:04:05"), c.CostTime, c.Success)
+	revision := c.Revision
+	if revision == "" {
+		revision = "-"
+	}
+	return fmt.Sprintf("%s|%s|%s|%s|%s|%s|%dms|%+v", c.ClientIP, c.Action, c.Namespace, c.Resource,
+		revision, time.Unix(c.Timestamp/1000, 0).Format(time.DateTime), c.CostTime, c.Success)
 }
 
 type ConfigMetricType string
